@@ -1,0 +1,81 @@
+library(Seurat)
+library(Matrix)
+library(dplyr)
+library(cowplot)
+library(SingleCellExperiment)
+library(cellassign)
+library(here)
+library(patchwork)
+
+# load data
+mydata1 <- Read10X(data.dir = here("WT_filtered_matrix"))
+mydata2 <- Read10X(data.dir = here("SubA_filtered_matrix"))
+mydata11 <- CreateSeuratObject(counts = mydata1$`Gene Expression`, project = "CT", min.cells = 3, min.features = 200)
+mydata22<- CreateSeuratObject(counts = mydata2$`Gene Expression`, project = "SubA", min.cells = 3, min.features = 200)
+mydata=merge(mydata11, y=mydata22, project="CTvsSubA")
+
+# QC
+mydata[["percent.mt"]] <- PercentageFeatureSet(mydata, pattern = "^mt-")
+mydatafil <- subset(mydata, subset = nFeature_RNA > 500 & nFeature_RNA < 4000 & percent.mt < 5)
+num=rowSums(mydatafil@assays$RNA@counts)
+features=names(num[num>0])
+mydatafil <- subset(mydatafil, features = features)
+
+# Preprocessing
+mydata.list <- SplitObject(mydatafil, split.by = "orig.ident")
+mydata.list <- lapply(X = mydata.list, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+features <- SelectIntegrationFeatures(object.list = mydata.list)
+anchors <- FindIntegrationAnchors(object.list = mydata.list, anchor.features = features)
+combined <- IntegrateData(anchorset = anchors)
+DefaultAssay(combined) <- "integrated"
+combined <- ScaleData(combined, verbose = FALSE)
+combined <- RunPCA(combined, npcs = 30, verbose = FALSE)
+combined<- JackStraw(combined, num.replicate = 100)
+combined <- ScoreJackStraw(combined, dims = 1:20)
+JackStrawPlot(combined, dims = 1:20)
+ElbowPlot(combined)
+combined <- RunUMAP(combined, reduction = "pca", dims = 1:15)
+combined <- RunTSNE(combined, reduction = "pca", dims = 1:15)
+combined <- FindNeighbors(combined, reduction = "pca", dims = 1:15)
+combined <- FindClusters(combined, resolution = 0.2)
+table(combined@active.ident, combined@meta.data$orig.ident)
+DefaultAssay(combined) <- "RNA"
+markers <- FindAllMarkers(combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+
+# UMAP
+DimPlot(combined, label = TRUE,repel = TRUE, reduction = "umap", split.by="orig.ident", pt.size = 0.5, label.size = 4)
+
+# DotPlot
+DotPlot(combined, features = c("Tgm2","Ifit1bl1","Ifit1","Maoa","Atp1a1","Atp2b1","Plb1","Lct",
+"Enpp7","Slc28a2","Nt5e","Cldn4","Tff3","Muc2","Ang4","Ccl20","Clu","Anxa5","Chgb","Chga","Neurod1"),
+        idents=c("0","1","2","3","4","5","6"), cols = c("Lightgrey","Red"),
+        col.min = 0,col.max =2, cluster.idents = F, scale.by = "size")
+
+combined@meta.data$group=as.factor(combined@meta.data$orig.ident)
+levels(combined@meta.data$group)=c("CT","SubA")
+combined$celltype.SubA <- paste(Idents(combined), combined$group, sep = "_")
+combined$celltype <- Idents(combined)
+Idents(combined) <- "celltype.SubA"
+DotPlot(combined, features = c("Hspa5","Atf4","Xbp1","Eif2a"),
+idents=c("0_CT","1_CT","2_CT","3_CT","4_CT","5_CT","6_CT",
+"0_SubA","1_SubA","2_SubA","3_SubA","4_SubA","5_SubA","6_SubA"), 
+        cols = c("Lightgrey","Red"),col.min = -2,col.max =2, cluster.idents = F,scale = TRUE,scale.by = "size")
+
+# ViolinPlot
+Idents(sub) <- "celltype"
+DefaultAssay(sub) <- "RNA"
+sub<-subset(x=combined, subset = Duox2 > 0)
+DefaultAssay(sub) <- "integrated"
+VlnPlot(sub, features = c("Duox2"), split.by = "orig.ident", pt.size = 0, combine = FALSE)
+DefaultAssay(sub) <- "RNA"
+sub<-subset(x=combined, subset = Duoxa2 > 0)
+DefaultAssay(sub) <- "integrated"
+VlnPlot(sub, features = c("Duoxa2"), split.by = "orig.ident", pt.size = 0, combine = FALSE)
+DefaultAssay(sub) <- "RNA"
+sub<-subset(x=combined, subset = Pnp > 0)
+VlnPlot(sub, features = c("Pnp"), split.by = "orig.ident", pt.size = 0, combine = FALSE)
+sub<-subset(x=combined, subset = Xdh > 0)
+VlnPlot(sub, features = c("Xdh"), split.by = "orig.ident", pt.size = 0, combine = FALSE)
